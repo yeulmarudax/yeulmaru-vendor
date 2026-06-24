@@ -27,20 +27,32 @@ export default function RecommendPage() {
   const [profile, setProfile]                   = useState(null)
   const [loading, setLoading]                   = useState(true)
   const [refreshKey, setRefreshKey]             = useState(0)
+
+  // 추천 등록 모달
   const [showModal, setShowModal]               = useState(false)
   const [selectedVendorId, setSelectedVendorId] = useState('')
   const [reason, setReason]                     = useState('')
   const [saving, setSaving]                     = useState(false)
   const [errorMsg, setErrorMsg]                 = useState('')
   const [successMsg, setSuccessMsg]             = useState('')
+
+  // 반려 사유 모달
+  const [showRejectModal, setShowRejectModal]   = useState(false)
+  const [rejectTarget, setRejectTarget]         = useState(null)
+  const [rejectReason, setRejectReason]         = useState('')
+  const [rejectSaving, setRejectSaving]         = useState(false)
+  const [rejectError, setRejectError]           = useState('')
+
+  // 반려 사유 보기 모달
+  const [showRejectViewModal, setShowRejectViewModal] = useState(false)
+  const [viewRejectRec, setViewRejectRec]             = useState(null)
+
   const [search, setSearch]                     = useState('')
   const [statusFilter, setStatusFilter]         = useState('all')
 
   const isAdmin = profile?.role === 'admin' || profile?.role === 'purchasing'
 
-  const refresh = useCallback(() => {
-    setRefreshKey((k) => k + 1)
-  }, [])
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), [])
 
   const filtered = useMemo(() => {
     let list = recommendations
@@ -51,7 +63,7 @@ export default function RecommendPage() {
     if (keyword) {
       list = list.filter(
         (r) =>
-          r.vendors?.company_name?.toLowerCase().includes(keyword) ||
+          r.vendors?.vendor_name?.toLowerCase().includes(keyword) ||
           r.reason?.toLowerCase().includes(keyword)
       )
     }
@@ -60,40 +72,31 @@ export default function RecommendPage() {
 
   useEffect(() => {
     let cancelled = false
-
     const load = async () => {
       setLoading(true)
-
       const { data: authData } = await supabase.auth.getUser()
       const user = authData?.user
       if (!user || cancelled) { setLoading(false); return }
 
       const { data: prof } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single()
+        .from('profiles').select('*').eq('id', user.id).single()
 
       const { data: vendorData } = await supabase
         .from('vendors')
-        .select('id, company_name')
-        .order('company_name', { ascending: true })
+        .select('id, vendor_name')
+        .order('vendor_name', { ascending: true })
 
       const isAdminRole = prof?.role === 'admin' || prof?.role === 'purchasing'
 
       let query = supabase
         .from('vendor_recommendations')
-        .select('id, reason, status, created_at, reviewed_at, recommended_by, reviewed_by, vendors ( company_name )')
+        .select('id, reason, status, reject_reason, created_at, reviewed_at, recommended_by, reviewed_by, vendors ( vendor_name )')
         .order('created_at', { ascending: false })
 
-      if (!isAdminRole) {
-        query = query.eq('recommended_by', user.id)
-      }
+      if (!isAdminRole) query = query.eq('recommended_by', user.id)
 
       const { data: recData, error: recError } = await query
-      if (recError) {
-        console.error('load error:', recError.message)
-      }
+      if (recError) console.error('load error:', recError.message)
 
       let enriched = recData ?? []
 
@@ -104,16 +107,11 @@ export default function RecommendPage() {
             ...enriched.map((r) => r.reviewed_by).filter(Boolean),
           ]),
         ]
-
         const { data: profilesData } = await supabase
-          .from('profiles')
-          .select('id, name')
-          .in('id', allUids)
-
+          .from('profiles').select('id, name').in('id', allUids)
         const profileMap = Object.fromEntries(
           (profilesData ?? []).map((p) => [p.id, p.name])
         )
-
         enriched = enriched.map((r) => ({
           ...r,
           recommender_name: profileMap[r.recommended_by] ?? r.recommended_by,
@@ -128,27 +126,24 @@ export default function RecommendPage() {
         setLoading(false)
       }
     }
-
     load()
     return () => { cancelled = true }
   }, [refreshKey])
 
+  // 추천 등록
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!selectedVendorId) { setErrorMsg('추천할 벤더를 선택해주세요.'); return }
-    if (!reason.trim())    { setErrorMsg('추천 사유를 입력해주세요.');   return }
-
+    if (!selectedVendorId) { setErrorMsg('추천할 거래처를 선택해주세요.'); return }
+    if (!reason.trim())    { setErrorMsg('추천 사유를 입력해주세요.');      return }
     setSaving(true)
     setErrorMsg('')
-
     try {
       const { data: authData, error: authError } = await supabase.auth.getUser()
       if (authError || !authData?.user) {
-        setErrorMsg('인증 정보를 확인할 수 없습니다. 다시 로그인해주세요.')
+        setErrorMsg('인증 정보를 확인할 수 없습니다.')
         setSaving(false)
         return
       }
-
       const { error } = await supabase
         .from('vendor_recommendations')
         .insert([{
@@ -157,12 +152,7 @@ export default function RecommendPage() {
           recommended_by: authData.user.id,
           status:         'added',
         }])
-
-      if (error) {
-        setErrorMsg('저장 중 오류가 발생했습니다: ' + error.message)
-        return
-      }
-
+      if (error) { setErrorMsg('저장 중 오류: ' + error.message); return }
       setShowModal(false)
       setSelectedVendorId('')
       setReason('')
@@ -170,54 +160,92 @@ export default function RecommendPage() {
       setTimeout(() => setSuccessMsg(''), 3000)
       refresh()
     } catch (err) {
-      console.error('handleSubmit error:', err)
+      console.error(err)
       setErrorMsg('예기치 않은 오류가 발생했습니다.')
     } finally {
       setSaving(false)
     }
   }
 
-  const handleStatusChange = async (rec, newStatus) => {
-    const label = newStatus === 'approved' ? '승인' : '반려'
-    const companyName = rec.vendors?.company_name ?? ''
-    if (!window.confirm('"' + companyName + '" 추천을 ' + label + '하시겠습니까?')) return
-
+  // 승인 처리
+  const handleApprove = async (rec) => {
+    const vendorName = rec.vendors?.vendor_name ?? ''
+    if (!window.confirm('"' + vendorName + '" 추천을 승인하시겠습니까?')) return
     try {
       const { data: authData } = await supabase.auth.getUser()
       const { error } = await supabase
         .from('vendor_recommendations')
         .update({
-          status:      newStatus,
+          status:      'approved',
           reviewed_by: authData.user.id,
           reviewed_at: new Date().toISOString(),
+          reject_reason: null,
         })
         .eq('id', rec.id)
-
-      if (error) {
-        alert('상태 변경 실패: ' + error.message)
-      } else {
-        refresh()
-      }
+      if (error) alert('승인 실패: ' + error.message)
+      else refresh()
     } catch (err) {
-      console.error('handleStatusChange error:', err)
+      console.error(err)
       alert('예기치 않은 오류가 발생했습니다.')
     }
   }
 
-  const handleDelete = async (rec) => {
-    const companyName = rec.vendors?.company_name ?? ''
-    if (!window.confirm('"' + companyName + '" 추천 이력을 삭제하시겠습니까?')) return
+  // 반려 모달 열기
+  const openRejectModal = (rec) => {
+    setRejectTarget(rec)
+    setRejectReason('')
+    setRejectError('')
+    setShowRejectModal(true)
+  }
 
-    const { error } = await supabase
-      .from('vendor_recommendations')
-      .delete()
-      .eq('id', rec.id)
-
-    if (error) {
-      alert('삭제 실패: ' + error.message)
-    } else {
-      setRecommendations((prev) => prev.filter((r) => r.id !== rec.id))
+  // 반려 처리 확정
+  const handleRejectConfirm = async () => {
+    if (!rejectReason.trim()) {
+      setRejectError('반려 사유를 입력해주세요.')
+      return
     }
+    setRejectSaving(true)
+    setRejectError('')
+    try {
+      const { data: authData } = await supabase.auth.getUser()
+      const { error } = await supabase
+        .from('vendor_recommendations')
+        .update({
+          status:        'rejected',
+          reviewed_by:   authData.user.id,
+          reviewed_at:   new Date().toISOString(),
+          reject_reason: rejectReason.trim(),
+        })
+        .eq('id', rejectTarget.id)
+      if (error) {
+        setRejectError('반려 처리 실패: ' + error.message)
+      } else {
+        setShowRejectModal(false)
+        setRejectTarget(null)
+        setRejectReason('')
+        refresh()
+      }
+    } catch (err) {
+      console.error(err)
+      setRejectError('예기치 않은 오류가 발생했습니다.')
+    } finally {
+      setRejectSaving(false)
+    }
+  }
+
+  // 반려 사유 보기
+  const openRejectView = (rec) => {
+    setViewRejectRec(rec)
+    setShowRejectViewModal(true)
+  }
+
+  const handleDelete = async (rec) => {
+    const vendorName = rec.vendors?.vendor_name ?? ''
+    if (!window.confirm('"' + vendorName + '" 추천 이력을 삭제하시겠습니까?')) return
+    const { error } = await supabase
+      .from('vendor_recommendations').delete().eq('id', rec.id)
+    if (error) alert('삭제 실패: ' + error.message)
+    else setRecommendations((prev) => prev.filter((r) => r.id !== rec.id))
   }
 
   const handleClose = () => {
@@ -229,6 +257,7 @@ export default function RecommendPage() {
 
   return (
     <div>
+      {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">추천 벤더</h1>
@@ -256,6 +285,7 @@ export default function RecommendPage() {
         </div>
       )}
 
+      {/* 검색 / 탭 */}
       <div className="flex flex-wrap gap-3 mb-4">
         <input
           type="text"
@@ -282,6 +312,7 @@ export default function RecommendPage() {
         </div>
       </div>
 
+      {/* 테이블 */}
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
         {loading ? (
           <p className="text-center text-gray-400 text-sm py-12">불러오는 중...</p>
@@ -299,14 +330,14 @@ export default function RecommendPage() {
                 <th className="px-4 py-3 text-left">상태</th>
                 <th className="px-4 py-3 text-left">추천일</th>
                 <th className="px-4 py-3 text-left">검토자</th>
-                <th className="px-4 py-3 text-left w-28">처리</th>
+                <th className="px-4 py-3 text-left w-32">처리</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtered.map((rec) => (
                 <tr key={rec.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap">
-                    {rec.vendors?.company_name ?? '-'}
+                    {rec.vendors?.vendor_name ?? '-'}
                   </td>
                   <td className="px-4 py-3 text-gray-600 max-w-xs">
                     <p className="line-clamp-2">{rec.reason || '-'}</p>
@@ -317,12 +348,23 @@ export default function RecommendPage() {
                     </td>
                   )}
                   <td className="px-4 py-3">
-                    <span className={
-                      'px-2 py-1 rounded-full text-xs font-medium ' +
-                      (STATUS_META[rec.status]?.color ?? 'bg-gray-100 text-gray-500')
-                    }>
-                      {STATUS_META[rec.status]?.text ?? rec.status}
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <span className={
+                        'px-2 py-1 rounded-full text-xs font-medium w-fit ' +
+                        (STATUS_META[rec.status]?.color ?? 'bg-gray-100 text-gray-500')
+                      }>
+                        {STATUS_META[rec.status]?.text ?? rec.status}
+                      </span>
+                      {/* 반려 사유 보기 버튼 */}
+                      {rec.status === 'rejected' && rec.reject_reason && (
+                        <button
+                          onClick={() => openRejectView(rec)}
+                          className="text-xs text-red-500 hover:text-red-700 underline text-left"
+                        >
+                          반려 사유 보기
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-400 whitespace-nowrap">
                     {rec.created_at
@@ -336,13 +378,13 @@ export default function RecommendPage() {
                     {isAdmin && rec.status === 'added' ? (
                       <div className="flex gap-1">
                         <button
-                          onClick={() => handleStatusChange(rec, 'approved')}
+                          onClick={() => handleApprove(rec)}
                           className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
                         >
                           승인
                         </button>
                         <button
-                          onClick={() => handleStatusChange(rec, 'rejected')}
+                          onClick={() => openRejectModal(rec)}
                           className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600"
                         >
                           반려
@@ -364,6 +406,7 @@ export default function RecommendPage() {
         )}
       </div>
 
+      {/* ── 추천 등록 모달 ── */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
@@ -371,11 +414,11 @@ export default function RecommendPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  벤더 선택 <span className="text-red-500">*</span>
+                  거래처 선택 <span className="text-red-500">*</span>
                 </label>
                 {vendors.length === 0 ? (
                   <p className="text-xs text-gray-400 py-2">
-                    등록된 벤더가 없습니다. 먼저 벤더를 등록해주세요.
+                    등록된 거래처가 없습니다. 먼저 거래처를 등록해주세요.
                   </p>
                 ) : (
                   <select
@@ -383,9 +426,9 @@ export default function RecommendPage() {
                     onChange={(e) => setSelectedVendorId(e.target.value)}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
                   >
-                    <option value="">-- 벤더를 선택하세요 --</option>
+                    <option value="">-- 거래처를 선택하세요 --</option>
                     {vendors.map((v) => (
-                      <option key={v.id} value={v.id}>{v.company_name}</option>
+                      <option key={v.id} value={v.id}>{v.vendor_name}</option>
                     ))}
                   </select>
                 )}
@@ -402,9 +445,7 @@ export default function RecommendPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none"
                 />
               </div>
-              {errorMsg && (
-                <p className="text-red-500 text-xs">{errorMsg}</p>
-              )}
+              {errorMsg && <p className="text-red-500 text-xs">{errorMsg}</p>}
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -422,6 +463,77 @@ export default function RecommendPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── 반려 사유 입력 모달 ── */}
+      {showRejectModal && rejectTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-800 mb-1">추천 반려</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              <span className="font-medium text-gray-700">
+                {rejectTarget.vendors?.vendor_name}
+              </span>
+              의 추천을 반려합니다.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  반려 사유 <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="반려 사유를 입력하세요."
+                  rows={4}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                />
+              </div>
+              {rejectError && <p className="text-red-500 text-xs">{rejectError}</p>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowRejectModal(false); setRejectTarget(null) }}
+                  className="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleRejectConfirm}
+                  disabled={rejectSaving}
+                  className="px-4 py-2 text-sm text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {rejectSaving ? '처리 중...' : '반려 확정'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 반려 사유 보기 모달 ── */}
+      {showRejectViewModal && viewRejectRec && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-800 mb-1">반려 사유</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              <span className="font-medium text-gray-700">
+                {viewRejectRec.vendors?.vendor_name}
+              </span>
+            </p>
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700 whitespace-pre-wrap">
+              {viewRejectRec.reject_reason}
+            </div>
+            <div className="flex justify-end mt-5">
+              <button
+                onClick={() => { setShowRejectViewModal(false); setViewRejectRec(null) }}
+                className="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                닫기
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -107,7 +107,6 @@ export default function DashboardPage() {
     setThisMonthCount(monthly ?? 0)
   }
 
-  // ✅ 수정: 'vendor_recommend' → 'vendor_recommendations'
   async function fetchRecommendStats() {
     const { count, error: e } = await supabase
       .from('vendor_recommendations')
@@ -143,10 +142,11 @@ export default function DashboardPage() {
     setCategoryStats(sorted)
   }
 
+  // ✅ 수정 1: company_name → vendor_name, contact_phone → contact_mobile
   async function fetchRecentVendors() {
     const { data, error: e } = await supabase
       .from('vendors')
-      .select('id, company_name, business_category, contact_name, contact_phone, created_at')
+      .select('id, vendor_name, business_category, contact_name, contact_mobile, created_at')
       .order('created_at', { ascending: false })
       .limit(5)
     if (e) throw e
@@ -178,7 +178,7 @@ export default function DashboardPage() {
           onClick={() => navigate('/vendors')}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
         >
-          🏢 벤더 등록
+          🏢 거래처 등록
         </button>
         <button
           onClick={() => navigate('/recommend')}
@@ -212,7 +212,7 @@ export default function DashboardPage() {
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <StatCard
-              label="등록 벤더 수"
+              label="등록 거래처 수"
               value={totalVendors.toLocaleString()}
               sub={`이번 달 +${thisMonthCount}개 신규 등록`}
               icon="🏢"
@@ -241,7 +241,7 @@ export default function DashboardPage() {
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <h2 className="text-base font-semibold text-gray-700 mb-4">
-                📊 업종별 벤더 현황
+                📊 업종별 거래처 현황
               </h2>
               {categoryStats.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-8">데이터가 없습니다.</p>
@@ -262,7 +262,7 @@ export default function DashboardPage() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-base font-semibold text-gray-700">
-                  🕐 최근 등록 벤더
+                  🕐 최근 등록 거래처
                 </h2>
                 <button
                   onClick={() => navigate('/vendors')}
@@ -272,7 +272,7 @@ export default function DashboardPage() {
                 </button>
               </div>
               {recentVendors.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">등록된 벤더가 없습니다.</p>
+                <p className="text-sm text-gray-400 text-center py-8">등록된 거래처가 없습니다.</p>
               ) : (
                 <table className="w-full text-sm">
                   <thead>
@@ -286,7 +286,8 @@ export default function DashboardPage() {
                   <tbody>
                     {recentVendors.map(v => (
                       <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="py-2 font-medium text-gray-800">{v.company_name}</td>
+                        {/* ✅ 수정 2: v.company_name → v.vendor_name */}
+                        <td className="py-2 font-medium text-gray-800">{v.vendor_name ?? '-'}</td>
                         <td className="py-2 text-gray-500 truncate max-w-20">{v.business_category ?? '-'}</td>
                         <td className="py-2 text-gray-500">{v.contact_name ?? '-'}</td>
                         <td className="py-2 text-gray-400">{formatDate(v.created_at)}</td>

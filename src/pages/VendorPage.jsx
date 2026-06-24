@@ -1,583 +1,619 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
-
-const INITIAL_FORM = {
-  company_name: '',
-  business_number: '',
-  business_type: '',
-  business_category: '',
-  main_items: '',
-  address: '',
-  contact_name: '',
-  contact_phone: '',
-  contact_email: '',
-  note: '',
-}
+import * as XLSX from 'xlsx'
 
 export default function VendorPage() {
+  const { profile } = useOutletContext()
+  const isAdmin = profile?.role === 'admin'
+
   const [vendors, setVendors] = useState([])
-  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
-
+  const [searchTerm, setSearchTerm] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState(INITIAL_FORM)
-  const [saving, setSaving] = useState(false)
-  const [errorMsg, setErrorMsg] = useState('')
+  const [editingVendor, setEditingVendor] = useState(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [selectedVendor, setSelectedVendor] = useState(null)
+  const [uploadMsg, setUploadMsg] = useState('')
+  const fileInputRef = useRef(null)
 
-  const [selected, setSelected] = useState(null)
-  const [editMode, setEditMode] = useState(false)
-  const [editForm, setEditForm] = useState(INITIAL_FORM)
-  const [editSaving, setEditSaving] = useState(false)
-  const [editErrorMsg, setEditErrorMsg] = useState('')
+  const [form, setForm] = useState({
+    vendor_name: '',
+    business_number: '',
+    ceo_name: '',
+    business_type: '',
+    business_category: '',
+    materials: '',
+    has_delivery: false,
+    website: '',
+    address: '',
+    main_phone: '',
+    contact_name: '',
+    contact_mobile: '',
+    contact_email: '',
+    note: ''
+  })
 
-  // ── 벤더 목록 최초 조회 ─────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false
-    const fetchVendors = async () => {
-      setLoading(true)
-      const { data, error } = await supabase
-        .from('vendors')
-        .select('*')
-        .order('created_at', { ascending: false })
-      if (!cancelled) {
-        if (!error) setVendors(data ?? [])
-        setLoading(false)
-      }
-    }
-    fetchVendors()
-    return () => { cancelled = true }
-  }, [])
+  useEffect(() => { fetchVendors() }, [])
 
-  // 등록·수정·삭제 후 목록 새로고침
-  const refreshVendors = async () => {
+  async function fetchVendors() {
+    setLoading(true)
     const { data, error } = await supabase
       .from('vendors')
       .select('*')
       .order('created_at', { ascending: false })
-    if (!error) setVendors(data ?? [])
+    if (!error) setVendors(data || [])
+    setLoading(false)
   }
 
-  // ── 검색 필터 ───────────────────────────────────────────────
-  const filtered = useMemo(() => {
-    const keyword = search.trim().toLowerCase()
-    if (!keyword) return vendors
-    return vendors.filter((v) =>
-      v.company_name?.toLowerCase().includes(keyword) ||
-      v.business_type?.toLowerCase().includes(keyword) ||
-      v.contact_name?.toLowerCase().includes(keyword)
-    )
-  }, [search, vendors])
-
-  // ── 등록 모달 핸들러 ────────────────────────────────────────
-  const handleChange = (e) => {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
-  }
-
-  const handleClose = () => {
-    setShowModal(false)
-    setForm(INITIAL_FORM)
-    setErrorMsg('')
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!form.company_name.trim()) {
-      setErrorMsg('업체명은 필수 입력 항목입니다.')
-      return
-    }
-    setSaving(true)
-    setErrorMsg('')
-
-    let userId = null
-    try {
-      const { data: sessionData } = await supabase.auth.getSession()
-      userId = sessionData?.session?.user?.id ?? null
-    } catch {
-      // 인증 정보를 가져오지 못해도 등록은 계속 진행
-    }
-
-    const { error } = await supabase.from('vendors').insert([{
-      company_name:      form.company_name.trim(),
-      business_number:   form.business_number.trim()   || null,
-      business_type:     form.business_type.trim()     || null,
-      business_category: form.business_category.trim() || null,
-      main_items:        form.main_items.trim()        || null,
-      address:           form.address.trim()           || null,
-      contact_name:      form.contact_name.trim()      || null,
-      contact_phone:     form.contact_phone.trim()     || null,
-      contact_email:     form.contact_email.trim()     || null,
-      note:              form.note.trim()              || null,
-      registered_by:     userId,
-    }])
-
-    setSaving(false)
-    if (error) {
-      setErrorMsg('저장 중 오류가 발생했습니다: ' + error.message)
-    } else {
-      handleClose()
-      await refreshVendors()
-    }
-  }
-
-  // ── 상세 / 수정 모달 핸들러 ─────────────────────────────────
-  const handleRowClick = (vendor) => {
-    setSelected(vendor)
-    setEditMode(false)
-    setEditErrorMsg('')
-  }
-
-  const handleDetailClose = () => {
-    setSelected(null)
-    setEditMode(false)
-    setEditForm(INITIAL_FORM)
-    setEditErrorMsg('')
-  }
-
-  const handleEditStart = () => {
-    setEditForm({
-      company_name:      selected.company_name      ?? '',
-      business_number:   selected.business_number   ?? '',
-      business_type:     selected.business_type     ?? '',
-      business_category: selected.business_category ?? '',
-      main_items:        selected.main_items        ?? '',
-      address:           selected.address           ?? '',
-      contact_name:      selected.contact_name      ?? '',
-      contact_phone:     selected.contact_phone     ?? '',
-      contact_email:     selected.contact_email     ?? '',
-      note:              selected.note              ?? '',
+  function openAddModal() {
+    setEditingVendor(null)
+    setForm({
+      vendor_name: '', business_number: '', ceo_name: '',
+      business_type: '', business_category: '', materials: '',
+      has_delivery: false,
+      website: '', address: '', main_phone: '',
+      contact_name: '', contact_mobile: '', contact_email: '', note: ''
     })
-    setEditErrorMsg('')
-    setEditMode(true)
+    setShowModal(true)
   }
 
-  const handleEditChange = (e) => {
-    setEditForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
+  function openEditModal(vendor) {
+    setEditingVendor(vendor)
+    setForm({
+      vendor_name: vendor.vendor_name || '',
+      business_number: vendor.business_number || '',
+      ceo_name: vendor.ceo_name || '',
+      business_type: vendor.business_type || '',
+      business_category: vendor.business_category || '',
+      materials: vendor.materials || '',
+      has_delivery: vendor.has_delivery ?? false,
+      website: vendor.website || '',
+      address: vendor.address || '',
+      main_phone: vendor.main_phone || '',
+      contact_name: vendor.contact_name || '',
+      contact_mobile: vendor.contact_mobile || '',
+      contact_email: vendor.contact_email || '',
+      note: vendor.note || ''
+    })
+    setShowModal(true)
   }
 
-  const handleEditSubmit = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault()
-    if (!editForm.company_name.trim()) {
-      setEditErrorMsg('업체명은 필수 입력 항목입니다.')
-      return
-    }
-    setEditSaving(true)
-    setEditErrorMsg('')
-
-    const { error } = await supabase
-      .from('vendors')
-      .update({
-        company_name:      editForm.company_name.trim(),
-        business_number:   editForm.business_number.trim()   || null,
-        business_type:     editForm.business_type.trim()     || null,
-        business_category: editForm.business_category.trim() || null,
-        main_items:        editForm.main_items.trim()        || null,
-        address:           editForm.address.trim()           || null,
-        contact_name:      editForm.contact_name.trim()      || null,
-        contact_phone:     editForm.contact_phone.trim()     || null,
-        contact_email:     editForm.contact_email.trim()     || null,
-        note:              editForm.note.trim()              || null,
-        updated_at:        new Date().toISOString(),
-      })
-      .eq('id', selected.id)
-
-    setEditSaving(false)
-    if (error) {
-      setEditErrorMsg('수정 중 오류가 발생했습니다: ' + error.message)
+    if (editingVendor) {
+      const { error } = await supabase
+        .from('vendors')
+        .update({ ...form, updated_at: new Date().toISOString() })
+        .eq('id', editingVendor.id)
+      if (!error) { fetchVendors(); setShowModal(false) }
     } else {
-      setSelected((prev) => ({
-        ...prev,
-        ...editForm,
-        company_name:      editForm.company_name.trim(),
-        business_number:   editForm.business_number.trim()   || null,
-        business_type:     editForm.business_type.trim()     || null,
-        business_category: editForm.business_category.trim() || null,
-        main_items:        editForm.main_items.trim()        || null,
-        address:           editForm.address.trim()           || null,
-        contact_name:      editForm.contact_name.trim()      || null,
-        contact_phone:     editForm.contact_phone.trim()     || null,
-        contact_email:     editForm.contact_email.trim()     || null,
-        note:              editForm.note.trim()              || null,
-        updated_at:        new Date().toISOString(),
-      }))
-      setEditMode(false)
-      await refreshVendors()
+      const { error } = await supabase
+        .from('vendors')
+        .insert([{ ...form, status: 'active', registered_by: profile.id }])
+      if (!error) { fetchVendors(); setShowModal(false) }
     }
   }
 
-  const handleDelete = async () => {
-    if (!window.confirm(`"${selected.company_name}" 벤더를 삭제하시겠습니까?`)) return
-    const { error } = await supabase
-      .from('vendors')
-      .delete()
-      .eq('id', selected.id)
-    if (error) {
-      setEditErrorMsg('삭제 중 오류가 발생했습니다: ' + error.message)
-    } else {
-      handleDetailClose()
-      await refreshVendors()
+  async function handleDelete(id) {
+    const { error } = await supabase.from('vendors').delete().eq('id', id)
+    if (!error) {
+      fetchVendors()
+      setDeleteConfirm(null)
+      setSelectedVendor(null)
     }
   }
 
-  // ── ESC 키로 모달 닫기 ──────────────────────────────────────
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key !== 'Escape') return
-      if (selected) {
-        setSelected(null)
-        setEditMode(false)
-        setEditForm(INITIAL_FORM)
-        setEditErrorMsg('')
-        return
-      }
-      if (showModal) {
-        setShowModal(false)
-        setForm(INITIAL_FORM)
-        setErrorMsg('')
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [showModal, selected])
+  function handleExcelDownload() {
+    const exportData = vendors.map(v => ({
+      '거래처명': v.vendor_name,
+      '사업자등록번호': v.business_number,
+      '대표자명': v.ceo_name,
+      '업태': v.business_type,
+      '업종': v.business_category,
+      '세부 취급 자재/서비스': v.materials,
+      '납품실적': v.has_delivery ? '유' : '무',
+      '홈페이지': v.website,
+      '주소': v.address,
+      '대표번호': v.main_phone,
+      '담당자 이름': v.contact_name,
+      '담당자 휴대폰': v.contact_mobile,
+      '담당자 이메일': v.contact_email,
+      '비고(업체특징)': v.note,
+      '등록일': v.created_at ? new Date(v.created_at).toLocaleDateString('ko-KR') : ''
+    }))
+    const ws = XLSX.utils.json_to_sheet(exportData)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '거래처목록')
+    XLSX.writeFile(wb, `거래처목록_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
 
-  // ── 공통 input className ────────────────────────────────────
-  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400'
+  function handleTemplateDownload() {
+    const template = [{
+      '거래처명': '', '사업자등록번호': '', '대표자명': '',
+      '업태': '', '업종': '', '세부 취급 자재/서비스': '',
+      '납품실적': '유 또는 무',
+      '홈페이지': '', '주소': '', '대표번호': '',
+      '담당자 이름': '', '담당자 휴대폰': '', '담당자 이메일': '', '비고(업체특징)': ''
+    }]
+    const ws = XLSX.utils.json_to_sheet(template)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '거래처등록양식')
+    XLSX.writeFile(wb, '거래처등록양식.xlsx')
+  }
+
+  async function handleExcelUpload(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploadMsg('업로드 중...')
+    const reader = new FileReader()
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: 'binary' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json(ws)
+        if (rows.length === 0) { setUploadMsg('데이터가 없습니다.'); return }
+        const insertData = rows
+          .map(r => ({
+            vendor_name: r['거래처명'] || '',
+            business_number: r['사업자등록번호'] ? String(r['사업자등록번호']) : '',
+            ceo_name: r['대표자명'] || '',
+            business_type: r['업태'] || '',
+            business_category: r['업종'] || '',
+            materials: r['세부 취급 자재/서비스'] || '',
+            has_delivery: r['납품실적'] === '유' || r['납품실적'] === true,
+            website: r['홈페이지'] || '',
+            address: r['주소'] || '',
+            main_phone: r['대표번호'] ? String(r['대표번호']) : '',
+            contact_name: r['담당자 이름'] || '',
+            contact_mobile: r['담당자 휴대폰'] ? String(r['담당자 휴대폰']) : '',
+            contact_email: r['담당자 이메일'] || '',
+            note: r['비고(업체특징)'] || '',
+            status: 'active',
+            registered_by: profile.id
+          }))
+          .filter(r => r.vendor_name)
+        const { error } = await supabase.from('vendors').insert(insertData)
+        if (error) {
+          setUploadMsg(`오류: ${error.message}`)
+        } else {
+          setUploadMsg(`${insertData.length}개 거래처가 등록되었습니다.`)
+          fetchVendors()
+        }
+      } catch {
+        setUploadMsg('파일 파싱 중 오류가 발생했습니다.')
+      }
+      e.target.value = ''
+      setTimeout(() => setUploadMsg(''), 4000)
+    }
+    reader.readAsBinaryString(file)
+  }
+
+    const filteredVendors = vendors.filter(v =>
+    (v.vendor_name || '').includes(searchTerm) ||
+    (v.business_number || '').includes(searchTerm) ||
+    (v.ceo_name || '').includes(searchTerm) ||
+    (v.materials || '').includes(searchTerm) ||
+    (v.contact_name || '').includes(searchTerm)
+  )
 
   return (
-    <div>
-      {/* 페이지 헤더 */}
+    <div className="p-6">
+      {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">벤더 목록</h1>
+          <h1 className="text-2xl font-bold text-gray-800">거래처 관리</h1>
           <p className="text-sm text-gray-500 mt-1">
-            등록된 공급사 목록을 관리합니다.
-            {!loading && (
-              <span className="ml-2 text-blue-500 font-medium">
-                총 {vendors.length}개
-                {search && ` · 검색결과 ${filtered.length}개`}
-              </span>
-            )}
+            전체 {vendors.length}개 · 검색결과 {filteredVendors.length}개
           </p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          + 벤더 등록
-        </button>
+        <div className="flex gap-2 flex-wrap justify-end">
+
+          {/* 엑셀 양식 - 모든 사용자 */}
+          <button
+            onClick={handleTemplateDownload}
+            className="flex items-center gap-1 px-4 py-2 bg-gray-500 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            엑셀 양식
+          </button>
+
+          {/* 엑셀 업로드 - 모든 사용자 */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            엑셀 업로드
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={handleExcelUpload}
+          />
+
+          {/* 엑셀 다운로드 - 모든 사용자 */}
+          <button
+            onClick={handleExcelDownload}
+            className="flex items-center gap-1 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            엑셀 다운로드
+          </button>
+
+          {/* 거래처 추가 - 모든 사용자 */}
+          <button
+            onClick={openAddModal}
+            className="flex items-center gap-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 4v16m8-8H4" />
+            </svg>
+            거래처 추가
+          </button>
+
+        </div>
       </div>
 
+      {/* 업로드 결과 메시지 */}
+      {uploadMsg && (
+        <div className="mb-4 px-4 py-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg text-sm">
+          {uploadMsg}
+        </div>
+      )}
+
       {/* 검색 */}
-      <div className="mb-4">
+      <div className="flex gap-3 mb-4">
         <input
           type="text"
-          placeholder="업체명 · 업종 · 담당자로 검색..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full sm:w-96 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="거래처명, 사업자번호, 대표자, 취급품목, 담당자 검색"
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
 
       {/* 테이블 */}
-      <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        {loading ? (
-          <p className="text-center text-gray-400 text-sm py-12">불러오는 중...</p>
-        ) : filtered.length === 0 ? (
-          <p className="text-center text-gray-400 text-sm py-12">
-            {search ? '검색 결과가 없습니다.' : '등록된 벤더가 없습니다.'}
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">불러오는 중...</div>
+      ) : filteredVendors.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">거래처가 없습니다.</div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-gray-600 uppercase text-xs">
               <tr>
-                <th className="px-4 py-3 text-left">업체명</th>
+                <th className="px-4 py-3 text-left">거래처명</th>
                 <th className="px-4 py-3 text-left">사업자번호</th>
-                <th className="px-4 py-3 text-left">업종</th>
-                <th className="px-4 py-3 text-left">업태</th>
-                <th className="px-4 py-3 text-left">주요품목</th>
+                <th className="px-4 py-3 text-left">대표자</th>
+                <th className="px-4 py-3 text-left">업태/업종</th>
+                <th className="px-4 py-3 text-left">취급품목</th>
+                <th className="px-4 py-3 text-left">납품실적</th>
+                <th className="px-4 py-3 text-left">대표전화</th>
                 <th className="px-4 py-3 text-left">담당자</th>
-                <th className="px-4 py-3 text-left">연락처</th>
-                <th className="px-4 py-3 text-left">등록일</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((v) => (
-                <tr
-                  key={v.id}
-                  onClick={() => handleRowClick(v)}
-                  className="hover:bg-blue-50 cursor-pointer transition-colors"
-                >
-                  <td className="px-4 py-3 font-medium text-gray-800 whitespace-nowrap">{v.company_name}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.business_number || '-'}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.business_type || '-'}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.business_category || '-'}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.main_items || '-'}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.contact_name || '-'}</td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{v.contact_phone || '-'}</td>
-                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">
-                    {v.created_at ? new Date(v.created_at).toLocaleDateString('ko-KR') : '-'}
+              {filteredVendors.map(vendor => (
+                <tr key={vendor.id} className="hover:bg-gray-50 transition">
+                  <td className="px-4 py-3 font-medium text-blue-700">
+                    <button
+                      onClick={() => setSelectedVendor(vendor)}
+                      className="hover:underline text-left"
+                    >
+                      {vendor.vendor_name}
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{vendor.business_number}</td>
+                  <td className="px-4 py-3 text-gray-600">{vendor.ceo_name}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {[vendor.business_type, vendor.business_category].filter(Boolean).join(' / ')}
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{vendor.materials}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                      vendor.has_delivery
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {vendor.has_delivery ? '유' : '무'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{vendor.main_phone}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {vendor.contact_name}
+                    {vendor.contact_mobile && (
+                      <div className="text-xs text-gray-400">{vendor.contact_mobile}</div>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* ── 등록 모달 ── */}
+      {/* 상세보기 모달 */}
+      {selectedVendor && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b">
+              <h2 className="text-xl font-bold text-gray-800">{selectedVendor.vendor_name}</h2>
+              <button onClick={() => setSelectedVendor(null)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+            </div>
+            <div className="p-6 grid grid-cols-2 gap-4 text-sm">
+              <div><span className="text-gray-400">사업자등록번호</span><p className="font-medium mt-1">{selectedVendor.business_number || '-'}</p></div>
+              <div><span className="text-gray-400">대표자명</span><p className="font-medium mt-1">{selectedVendor.ceo_name || '-'}</p></div>
+              <div><span className="text-gray-400">업태</span><p className="font-medium mt-1">{selectedVendor.business_type || '-'}</p></div>
+              <div><span className="text-gray-400">업종</span><p className="font-medium mt-1">{selectedVendor.business_category || '-'}</p></div>
+              <div className="col-span-2"><span className="text-gray-400">세부 취급 자재/서비스</span><p className="font-medium mt-1">{selectedVendor.materials || '-'}</p></div>
+              <div>
+                <span className="text-gray-400">납품 실적 유무</span>
+                <p className="mt-1">
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                    selectedVendor.has_delivery
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {selectedVendor.has_delivery ? '✓ 납품 실적 있음' : '✗ 납품 실적 없음'}
+                  </span>
+                </p>
+              </div>
+              <div><span className="text-gray-400">대표번호</span><p className="font-medium mt-1">{selectedVendor.main_phone || '-'}</p></div>
+              <div className="col-span-2"><span className="text-gray-400">주소</span><p className="font-medium mt-1">{selectedVendor.address || '-'}</p></div>
+              <div><span className="text-gray-400">담당자 이름</span><p className="font-medium mt-1">{selectedVendor.contact_name || '-'}</p></div>
+              <div><span className="text-gray-400">담당자 휴대폰</span><p className="font-medium mt-1">{selectedVendor.contact_mobile || '-'}</p></div>
+              <div className="col-span-2"><span className="text-gray-400">담당자 이메일</span><p className="font-medium mt-1">{selectedVendor.contact_email || '-'}</p></div>
+              {selectedVendor.website && (
+                <div className="col-span-2">
+                  <span className="text-gray-400">홈페이지</span>
+                  <p className="font-medium mt-1">
+                    <a href={selectedVendor.website} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                      {selectedVendor.website}
+                    </a>
+                  </p>
+                </div>
+              )}
+              {selectedVendor.note && (
+                <div className="col-span-2"><span className="text-gray-400">비고(업체특징)</span><p className="font-medium mt-1">{selectedVendor.note}</p></div>
+              )}
+              <div><span className="text-gray-400">등록일</span><p className="font-medium mt-1">{selectedVendor.created_at ? new Date(selectedVendor.created_at).toLocaleDateString('ko-KR') : '-'}</p></div>
+            </div>
+            {isAdmin && (
+              <div className="px-6 pb-6 flex justify-end gap-2">
+                <button
+                  onClick={() => { setSelectedVendor(null); openEditModal(selectedVendor) }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
+                >수정</button>
+                <button
+                  onClick={() => setDeleteConfirm(selectedVendor)}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition"
+                >삭제</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 삭제 확인 모달 */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+            <h3 className="text-lg font-bold text-gray-800 mb-2">거래처 삭제</h3>
+            <p className="text-sm text-gray-600 mb-1">아래 거래처를 삭제하시겠습니까?</p>
+            <p className="text-sm font-semibold text-red-500 mb-4">{deleteConfirm.vendor_name}</p>
+            <p className="text-xs text-gray-400 mb-5">삭제된 데이터는 복구할 수 없습니다.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+              >취소</button>
+              <button
+                onClick={() => handleDelete(deleteConfirm.id)}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600"
+              >삭제 확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 등록/수정 모달 */}
       {showModal && (
-        <div
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          onClick={handleClose}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-lg font-bold text-gray-800 mb-5">벤더 등록</h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b">
+              <h2 className="text-xl font-bold text-gray-800">
+                {editingVendor ? '거래처 수정' : '거래처 추가'}
+              </h2>
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >×</button>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
 
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  업체명 <span className="text-red-500">*</span>
-                </label>
-                <input type="text" name="company_name" value={form.company_name}
-                  onChange={handleChange} placeholder="예) (주)코스모스악기사"
-                  className={inputCls} />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">사업자등록번호</label>
-                <input type="text" name="business_number" value={form.business_number}
-                  onChange={handleChange} placeholder="000-00-00000" maxLength={12}
-                  className={inputCls} />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">업종</label>
-                  <input type="text" name="business_type" value={form.business_type}
-                    onChange={handleChange} placeholder="예) 음향, 악기"
-                    className={inputCls} />
+                  <label className="block text-xs text-gray-500 mb-1">거래처명 *</label>
+                  <input
+                    required
+                    value={form.vendor_name}
+                    onChange={e => setForm({ ...form, vendor_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">업태</label>
-                  <input type="text" name="business_category" value={form.business_category}
-                    onChange={handleChange} placeholder="예) 도소매, 서비스"
-                    className={inputCls} />
+                  <label className="block text-xs text-gray-500 mb-1">사업자등록번호</label>
+                  <input
+                    value={form.business_number}
+                    onChange={e => setForm({ ...form, business_number: e.target.value })}
+                    placeholder="000-00-00000"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">주요 품목</label>
-                <input type="text" name="main_items" value={form.main_items}
-                  onChange={handleChange} placeholder="예) 피아노, 현악기, 음향장비"
-                  className={inputCls} />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">주소</label>
-                <input type="text" name="address" value={form.address}
-                  onChange={handleChange} placeholder="예) 서울시 강남구 테헤란로 123"
-                  className={inputCls} />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">담당자</label>
-                  <input type="text" name="contact_name" value={form.contact_name}
-                    onChange={handleChange} placeholder="홍길동"
-                    className={inputCls} />
+                  <label className="block text-xs text-gray-500 mb-1">대표자명</label>
+                  <input
+                    value={form.ceo_name}
+                    onChange={e => setForm({ ...form, ceo_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">연락처</label>
-                  <input type="text" name="contact_phone" value={form.contact_phone}
-                    onChange={handleChange} placeholder="010-****-0000" maxLength={13}
-                    className={inputCls} />
+                  <label className="block text-xs text-gray-500 mb-1">업태</label>
+                  <input
+                    value={form.business_type}
+                    onChange={e => setForm({ ...form, business_type: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">업종</label>
+                  <input
+                    value={form.business_category}
+                    onChange={e => setForm({ ...form, business_category: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">대표번호</label>
+                  <input
+                    value={form.main_phone}
+                    onChange={e => setForm({ ...form, main_phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">세부 취급 자재/서비스</label>
+                  <input
+                    value={form.materials}
+                    onChange={e => setForm({ ...form, materials: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-2">납품 실적 유무</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, has_delivery: true })}
+                      className={
+                        form.has_delivery
+                          ? 'flex-1 py-2 rounded-lg text-sm font-medium border transition bg-green-500 text-white border-green-500'
+                          : 'flex-1 py-2 rounded-lg text-sm font-medium border transition bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+                      }
+                    >
+                      유 (있음)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, has_delivery: false })}
+                      className={
+                        !form.has_delivery
+                          ? 'flex-1 py-2 rounded-lg text-sm font-medium border transition bg-gray-500 text-white border-gray-500'
+                          : 'flex-1 py-2 rounded-lg text-sm font-medium border transition bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+                      }
+                    >
+                      무 (없음)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">주소</label>
+                  <input
+                    value={form.address}
+                    onChange={e => setForm({ ...form, address: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">담당자 이름</label>
+                  <input
+                    value={form.contact_name}
+                    onChange={e => setForm({ ...form, contact_name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">담당자 휴대폰</label>
+                  <input
+                    value={form.contact_mobile}
+                    onChange={e => setForm({ ...form, contact_mobile: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">담당자 이메일</label>
+                  <input
+                    type="email"
+                    value={form.contact_email}
+                    onChange={e => setForm({ ...form, contact_email: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">홈페이지</label>
+                  <input
+                    value={form.website}
+                    onChange={e => setForm({ ...form, website: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">비고(업체특징)</label>
+                  <textarea
+                    rows={3}
+                    value={form.note}
+                    onChange={e => setForm({ ...form, note: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
               </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">이메일</label>
-                <input type="email" name="contact_email" value={form.contact_email}
-                  onChange={handleChange} placeholder="example@company****"
-                  className={inputCls} />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">비고</label>
-                <textarea name="note" value={form.note} onChange={handleChange}
-                  placeholder="특이사항 또는 메모" rows={2}
-                  className={`${inputCls} resize-none`} />
-              </div>
-
-              {errorMsg && <p className="text-red-500 text-xs">{errorMsg}</p>}
-
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={handleClose}
-                  className="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+                >
                   취소
                 </button>
-                <button type="submit" disabled={saving}
-                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50">
-                  {saving ? '저장 중...' : '등록'}
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition"
+                >
+                  {editingVendor ? '수정 완료' : '등록'}
                 </button>
               </div>
-
             </form>
           </div>
         </div>
       )}
-
-      {/* ── 상세보기 / 수정 모달 ── */}
-      {selected && (
-        <div
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          onClick={handleDetailClose}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-bold text-gray-800">
-                {editMode ? '벤더 수정' : '벤더 상세'}
-              </h2>
-              <button onClick={handleDetailClose}
-                className="text-gray-400 hover:text-gray-600 text-xl font-bold leading-none">×</button>
-            </div>
-
-            {/* 상세보기 모드 */}
-            {!editMode && (
-              <div className="space-y-3 text-sm">
-                <Field label="업체명"     value={selected.company_name} />
-                <Field label="사업자번호" value={selected.business_number} />
-                <Field label="업종"       value={selected.business_type} />
-                <Field label="업태"       value={selected.business_category} />
-                <Field label="담당자"     value={selected.contact_name} />
-                <Field label="연락처"     value={selected.contact_phone} />
-                <Field label="이메일"     value={selected.contact_email} />
-                <Field label="주요 품목"  value={selected.main_items} />
-                <Field label="주소"       value={selected.address} />
-                {selected.note && (
-                  <div>
-                    <p className="text-xs font-medium text-gray-600 mb-1">비고</p>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg px-3 py-2">
-                      {selected.note}
-                    </p>
-                  </div>
-                )}
-                <p className="text-xs text-gray-400 pt-2">
-                  등록일: {selected.created_at ? new Date(selected.created_at).toLocaleDateString('ko-KR') : '-'}
-                  {selected.updated_at && ` · 수정일: ${new Date(selected.updated_at).toLocaleDateString('ko-KR')}`}
-                </p>
-                {editErrorMsg && <p className="text-red-500 text-xs">{editErrorMsg}</p>}
-                <div className="flex justify-end gap-2 pt-3">
-                  <button onClick={handleDelete}
-                    className="px-4 py-2 text-sm text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors">
-                    삭제
-                  </button>
-                  <button onClick={handleEditStart}
-                    className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-                    수정
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 수정 모드 */}
-            {editMode && (
-              <form onSubmit={handleEditSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    업체명 <span className="text-red-500">*</span>
-                  </label>
-                  <input type="text" name="company_name" value={editForm.company_name}
-                    onChange={handleEditChange} className={inputCls} />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">사업자등록번호</label>
-                  <input type="text" name="business_number" value={editForm.business_number}
-                    onChange={handleEditChange} maxLength={12} className={inputCls} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">업종</label>
-                    <input type="text" name="business_type" value={editForm.business_type}
-                      onChange={handleEditChange} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">업태</label>
-                    <input type="text" name="business_category" value={editForm.business_category}
-                      onChange={handleEditChange} className={inputCls} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">주요 품목</label>
-                  <input type="text" name="main_items" value={editForm.main_items}
-                    onChange={handleEditChange} className={inputCls} />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">주소</label>
-                  <input type="text" name="address" value={editForm.address}
-                    onChange={handleEditChange} className={inputCls} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">담당자</label>
-                    <input type="text" name="contact_name" value={editForm.contact_name}
-                      onChange={handleEditChange} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">연락처</label>
-                    <input type="text" name="contact_phone" value={editForm.contact_phone}
-                      onChange={handleEditChange} maxLength={13} className={inputCls} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">이메일</label>
-                  <input type="email" name="contact_email" value={editForm.contact_email}
-                    onChange={handleEditChange} className={inputCls} />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">비고</label>
-                  <textarea name="note" value={editForm.note} onChange={handleEditChange}
-                    rows={2} className={`${inputCls} resize-none`} />
-                </div>
-
-                {editErrorMsg && <p className="text-red-500 text-xs">{editErrorMsg}</p>}
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button type="button" onClick={() => { setEditMode(false); setEditErrorMsg('') }}
-                    className="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">
-                    취소
-                  </button>
-                  <button type="submit" disabled={editSaving}
-                    className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50">
-                    {editSaving ? '저장 중...' : '저장'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Field({ label, value }) {
-  return (
-    <div className="flex gap-2">
-      <span className="text-xs font-medium text-gray-500 w-24 shrink-0">{label}</span>
-      <span className="text-gray-800">{value || '-'}</span>
     </div>
   )
 }

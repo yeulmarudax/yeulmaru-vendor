@@ -65,7 +65,7 @@ export default function Layout() {
               }`
             }
           >
-            <span>🏢</span> 벤더 목록
+            <span>🏢</span> 거래처 관리
           </NavLink>
 
           <NavLink
@@ -78,7 +78,7 @@ export default function Layout() {
               }`
             }
           >
-            <span>📝</span> 벤더 추천
+            <span>📝</span> 거래처 추천
           </NavLink>
 
           <NavLink
@@ -146,7 +146,7 @@ export default function Layout() {
 
         {/* 페이지 콘텐츠 */}
         <main className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+          <Outlet context={{ profile }} />
         </main>
       </div>
     </div>

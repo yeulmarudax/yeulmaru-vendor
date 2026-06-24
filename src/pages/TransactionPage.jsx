@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+// C:\Projects\yeulmaru-vendor\src\pages\TransactionPage.jsx
+
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabaseClient'
 
 export default function TransactionPage() {
@@ -26,12 +28,47 @@ export default function TransactionPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
+  // 거래처 검색 콤보박스 상태
+  const [vendorSearch, setVendorSearch] = useState('')
+  const [vendorDropdownOpen, setVendorDropdownOpen] = useState(false)
+  const [selectedVendorName, setSelectedVendorName] = useState('')
+  const vendorInputRef = useRef(null)
+  const vendorDropdownRef = useRef(null)
+
+  // 콤보박스 외부 클릭 시 닫기
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (
+        vendorDropdownRef.current &&
+        !vendorDropdownRef.current.contains(e.target) &&
+        vendorInputRef.current &&
+        !vendorInputRef.current.contains(e.target)
+      ) {
+        setVendorDropdownOpen(false)
+        if (form.vendor_id) {
+          setVendorSearch(selectedVendorName)
+        } else {
+          setVendorSearch('')
+        }
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [form.vendor_id, selectedVendorName])
+
+  // 거래처 검색 필터링
+  const filteredVendors = vendors.filter(v =>
+    v.vendor_name.toLowerCase().includes(vendorSearch.toLowerCase())
+  )
+
   // 프로필 + 데이터 로드
   useEffect(() => {
     const load = async () => {
       setLoading(true)
 
-      const { data: { user } } = await supabase.auth.getUser()
+      // ✅ 중첩 구조분해 제거
+      const { data: authData1 } = await supabase.auth.getUser()
+      const user = authData1?.user
       if (user) {
         const { data: prof } = await supabase
           .from('profiles')
@@ -41,15 +78,14 @@ export default function TransactionPage() {
         setProfile(prof)
       }
 
-      // 벤더 목록 (active만) ✅ Fix 3: name → company_name
-      const { data: vendorData } = await supabase
+      const { data: vendorData, error: vendorErr } = await supabase
         .from('vendors')
-        .select('id, company_name')
-        .eq('status', 'active')
-        .order('company_name')
+        .select('id, vendor_name')
+        .order('vendor_name')
+      if (vendorErr) console.error('거래처 목록 로드 오류:', vendorErr)
       setVendors(vendorData || [])
 
-      // 거래 내역 (벤더명 조인) ✅ Fix 3: name → company_name
+      // 거래 내역 (거래처명 조인)
       let query = supabase
         .from('transactions')
         .select(`
@@ -61,7 +97,7 @@ export default function TransactionPage() {
           created_at,
           registered_by,
           vendor_id,
-          vendors ( company_name )
+          vendors ( vendor_name )
         `)
         .order('transaction_date', { ascending: false })
 
@@ -76,17 +112,17 @@ export default function TransactionPage() {
     load()
   }, [refreshKey, dateFrom, dateTo])
 
-  // 검색 필터 (클라이언트) ✅ Fix 3: name → company_name
+  // 검색 필터 (클라이언트)
   const filtered = transactions.filter(tx => {
     const term = searchTerm.toLowerCase()
     return (
-      (tx.vendors?.company_name || '').toLowerCase().includes(term) ||
+      (tx.vendors?.vendor_name || '').toLowerCase().includes(term) ||
       (tx.document_number || '').toLowerCase().includes(term) ||
       (tx.description || '').toLowerCase().includes(term)
     )
   })
 
-  // 모달 열기 ✅ Fix 1: (tx =) → (tx = null)
+  // 모달 열기
   const openModal = (tx = null) => {
     setError('')
     if (tx) {
@@ -98,6 +134,9 @@ export default function TransactionPage() {
         description: tx.description || '',
         transaction_date: tx.transaction_date || '',
       })
+      const vendorName = tx.vendors?.vendor_name || ''
+      setVendorSearch(vendorName)
+      setSelectedVendorName(vendorName)
     } else {
       setEditTarget(null)
       setForm({
@@ -107,7 +146,10 @@ export default function TransactionPage() {
         description: '',
         transaction_date: new Date().toISOString().split('T')[0],
       })
+      setVendorSearch('')
+      setSelectedVendorName('')
     }
+    setVendorDropdownOpen(false)
     setShowModal(true)
   }
 
@@ -115,6 +157,17 @@ export default function TransactionPage() {
     setShowModal(false)
     setEditTarget(null)
     setError('')
+    setVendorSearch('')
+    setSelectedVendorName('')
+    setVendorDropdownOpen(false)
+  }
+
+  // 거래처 선택 핸들러
+  const handleSelectVendor = (vendor) => {
+    setForm(f => ({ ...f, vendor_id: vendor.id }))
+    setVendorSearch(vendor.vendor_name)
+    setSelectedVendorName(vendor.vendor_name)
+    setVendorDropdownOpen(false)
   }
 
   // 저장
@@ -123,32 +176,37 @@ export default function TransactionPage() {
     setError('')
 
     if (!form.vendor_id || !form.amount || !form.transaction_date) {
-      setError('벤더, 금액, 거래일자는 필수 항목입니다.')
+      setError('거래처, 금액, 거래일자는 필수 항목입니다.')
       return
     }
 
     setSubmitting(true)
-    const { data: { user } } = await supabase.auth.getUser()
+
+    // ✅ 중첩 구조분해 제거
+    const { data: authData2 } = await supabase.auth.getUser()
+    const user = authData2?.user
 
     const payload = {
       vendor_id: form.vendor_id,
-      document_number: form.document_number || null,  // ✅ Fix 2: ||추가
+      document_number: form.document_number || null,
       amount: parseFloat(form.amount),
       description: form.description || null,
       transaction_date: form.transaction_date,
-      registered_by: user.id,
+      registered_by: user?.id,
     }
 
     let err
     if (editTarget) {
-      ;({ error: err } = await supabase
+      const { error: updateErr } = await supabase
         .from('transactions')
         .update(payload)
-        .eq('id', editTarget.id))
+        .eq('id', editTarget.id)
+      err = updateErr
     } else {
-      ;({ error: err } = await supabase
+      const { error: insertErr } = await supabase
         .from('transactions')
-        .insert([payload]))
+        .insert([payload])
+      err = insertErr
     }
 
     setSubmitting(false)
@@ -173,11 +231,12 @@ export default function TransactionPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
+
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">거래 내역</h1>
-          <p className="text-sm text-gray-500 mt-1">벤더별 거래 내역을 관리합니다</p>
+          <p className="text-sm text-gray-500 mt-1">거래처별 거래 내역을 관리합니다</p>
         </div>
         <button
           onClick={() => openModal()}
@@ -194,7 +253,7 @@ export default function TransactionPage() {
             <label className="block text-xs text-gray-500 mb-1">검색</label>
             <input
               type="text"
-              placeholder="벤더명, 문서번호, 설명 검색..."
+              placeholder="거래처명, 문서번호, 설명 검색..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -234,8 +293,8 @@ export default function TransactionPage() {
         {loading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">
             <svg className="animate-spin h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
             </svg>
             불러오는 중...
           </div>
@@ -249,7 +308,7 @@ export default function TransactionPage() {
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
                 <th className="text-left px-4 py-3 text-gray-500 font-medium">거래일자</th>
-                <th className="text-left px-4 py-3 text-gray-500 font-medium">벤더명</th>
+                <th className="text-left px-4 py-3 text-gray-500 font-medium">거래처명</th>
                 <th className="text-left px-4 py-3 text-gray-500 font-medium">문서번호</th>
                 <th className="text-left px-4 py-3 text-gray-500 font-medium">설명</th>
                 <th className="text-right px-4 py-3 text-gray-500 font-medium">금액</th>
@@ -261,8 +320,7 @@ export default function TransactionPage() {
                 <tr key={tx.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-3 text-gray-600">{tx.transaction_date}</td>
                   <td className="px-4 py-3 font-medium text-gray-800">
-                    {/* ✅ Fix 3: name → company_name */}
-                    {tx.vendors?.company_name || '-'}
+                    {tx.vendors?.vendor_name || '-'}
                   </td>
                   <td className="px-4 py-3 text-gray-500 font-mono text-xs">
                     {tx.document_number || '-'}
@@ -314,6 +372,8 @@ export default function TransactionPage() {
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+
+            {/* 모달 헤더 */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="text-lg font-bold text-gray-800">
                 {editTarget ? '거래 내역 수정' : '거래 등록'}
@@ -328,21 +388,71 @@ export default function TransactionPage() {
                 </div>
               )}
 
-              {/* 벤더 선택 ✅ Fix 3: v.name → v.company_name */}
+              {/* 거래처 검색 콤보박스 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  벤더 <span className="text-red-500">*</span>
+                  거래처 <span className="text-red-500">*</span>
                 </label>
-                <select
-                  value={form.vendor_id}
-                  onChange={e => setForm(f => ({ ...f, vendor_id: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">벤더를 선택하세요</option>
-                  {vendors.map(v => (
-                    <option key={v.id} value={v.id}>{v.company_name}</option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <input
+                    ref={vendorInputRef}
+                    type="text"
+                    placeholder="거래처명을 입력하여 검색..."
+                    value={vendorSearch}
+                    onChange={e => {
+                      setVendorSearch(e.target.value)
+                      setVendorDropdownOpen(true)
+                      if (e.target.value === '') {
+                        setForm(f => ({ ...f, vendor_id: '' }))
+                        setSelectedVendorName('')
+                      }
+                    }}
+                    onFocus={() => setVendorDropdownOpen(true)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {form.vendor_id && (
+                    <span className="absolute right-8 top-1/2 -translate-y-1/2 text-xs text-green-600 font-medium">
+                      ✓
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setVendorDropdownOpen(o => !o)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {vendorDropdownOpen && (
+                    <div
+                      ref={vendorDropdownRef}
+                      className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto"
+                    >
+                      {filteredVendors.length === 0 ? (
+                        <div className="px-3 py-3 text-sm text-gray-400 text-center">
+                          검색 결과가 없습니다
+                        </div>
+                      ) : (
+                        filteredVendors.map(v => (
+                          <button
+                            key={v.id}
+                            type="button"
+                            onClick={() => handleSelectVendor(v)}
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 hover:text-blue-700 transition-colors ${
+                              form.vendor_id === v.id
+                                ? 'bg-blue-50 text-blue-700 font-medium'
+                                : 'text-gray-700'
+                            }`}
+                          >
+                            {v.vendor_name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* 거래일자 */}
@@ -414,9 +524,11 @@ export default function TransactionPage() {
                 </button>
               </div>
             </form>
+
           </div>
         </div>
       )}
+
     </div>
   )
 }
